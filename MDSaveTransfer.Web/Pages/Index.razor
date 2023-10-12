@@ -1,0 +1,338 @@
+﻿@page "/"
+@using MDSaveTransfer.Converter
+@using MDSaveTransfer.Data
+@using BlazorDownloadFile
+@using MDSaveTransfer.Converter.Report
+@using MDSaveTransfer.Utils
+
+<PageTitle>Muse Dash save transfer</PageTitle>
+
+<h2>Save transfer <small><small><small>(Nintendo Switch to PC)</small></small></small></h2>
+
+@if (_state is States.Configuration or States.Loading)
+{
+    <div hidden="@(_state == States.Loading)">
+        <div>
+            Merge Muse Dash save data from the Nintendo Switch version into your existing PC save data.
+        </div>
+        <Callout Heading="TIP" Type="Callout.CalloutType.Tip">
+            Save data locations:
+            <ul>
+                <li>Windows: <code>%LocalAppData%\Steam\MuseDash\*.sav</code></li>
+                <li>Linux (Proton): <code>~/.steam/steam/steamapps/compatdata/774171/pfx/drive_c/users/steamuser/AppData/Local/Steam/MuseDash/*.sav</code></li>
+                <li>Nintendo Switch: Use <a href="https://github.com/BernardoGiordano/Checkpoint" target="_blank">Checkpoint</a> on a modded Switch to extract the <code>MDSaveData</code> file from the save data storage.</li>
+            </ul>
+            Make sure you have completed at least one stage on the PC version.<br/> 
+            Otherwise, the PC save data may not be fully initialized yet, and the converter will be forced to reconstruct the missing data on its own.
+        </Callout>
+
+        <BSForm Gutters="Gutters.Medium" IsBasic="true" Class="mt-2">
+            <div class="mb-3">
+                <label for="switchFile" class="form-label">Nintendo Switch save data file (MDSaveData)</label>
+                <BSInputFile id="switchFile" IsRequired="true" ValidWhen="@(() => true)" OnChange="OnSwitchFileChange" style="max-width: 700px"/>
+            </div>
+
+            <div class="mb-3">
+                <label for="pcFile" class="form-label">PC save data file (*.sav)</label>
+                <BSInputFile id="pcFile" IsRequired="true" ValidWhen="@(() => true)" OnChange="OnPcFileChange" style="max-width: 700px"/>
+            </div>
+    
+            <div class="mb-3">
+                <label for="mergeStrategy" class="form-label">
+                    Merge strategy
+                    <BSLink DataId="mergeStrategyHelp" Class="ms-2">
+                        <i class="bi bi-question-circle" DataId="mergeStrategyHelp"></i>
+                    </BSLink>
+                    <BSPopover Placement="Placement.Right" Target="mergeStrategyHelp" MouseOver="true">
+                        <Header>Hint</Header>
+                        <Content>
+                            <h6>Overwrite</h6>
+                            <p>
+                                A data key in the PC save data will be overwritten with the respective data key from the Switch save data, if it exists.<br/>
+                                Account-related data, such as user ids, will never be carried over from the Nintendo Switch save data.
+                            </p>
+                            <h6>Combine</h6>
+                            <p>
+                                The converter will attempt to combine data from the PC save and the Switch data by automatically merging data arrays (for example, the list of unlocked stages) and choosing the best value per data key (such as the best high-score for a stage).<br/>
+                                This mode is experimental.
+                            </p>
+                        </Content>
+                    </BSPopover>
+                </label>
+                <BSInput id="mergeStrategy" InputType="InputType.Select" @bind-Value="_mergeStrategy" style="max-width: 700px">
+                    <option value="@MergeStrategy.Overwrite">Overwrite existing PC save data</option>
+                    <option value="@MergeStrategy.Combine">Combine save data (not yet implemented)</option>
+                </BSInput>
+            </div>
+    
+            <BSButton Color="BSColor.Primary" Class="mb-4" @onclick="OnMergeStart">
+                <i class="bi bi-chevron-double-right"></i> Transfer save data
+            </BSButton>
+        </BSForm>
+    </div>
+}
+@if (_state == States.Loading)
+{
+    <div class="container-fluid">
+        <div style="height: 70vh !important" class="row justify-content-center align-items-center flex-column">
+            <div role="status" class="spinner-border text-secondary mb-2"></div>
+            <p class="text-center ms-1 me-1">
+                Processing data...
+            </p>
+        </div>
+    </div>
+}
+else if(_state == States.Results)
+{
+    <Callout Heading="DONE" Type="Callout.CalloutType.Success">
+        Transfer finished. Check the conversion report below for possible issues.
+    </Callout>
+    
+    <p>
+        The download of the modified PC save data file has automatically started. Please click <BSLink href="javascript:void(0)" OnClick="Redownload">here</BSLink> to retry if the download failed.
+    </p>
+    <p>
+        Backup your original save file and overwrite it with the new save data.
+    </p>
+    
+    <Callout Heading="IMPORTANT" Type="Callout.CalloutType.Danger">
+        Always keep backups of your original save data. This app cannot guarantee compatibility with future Muse Dash updates and may generate invalid data.
+    </Callout>
+    
+    @if (_report?.HasMessages == true)
+    {
+        <BSButton Color="BSColor.Primary" IsOutlined="true" Class="mb-4" @onclick="@(_ => _state = States.Configuration)">
+            <i class="bi bi-chevron-double-left"></i> Go back
+        </BSButton>
+    }
+    
+    <h4>Conversion report</h4>
+    <p>
+        @_report?.ErrorCount error(s), @_report?.WarningCount warning(s), @_report?.InformationCount notice(s)
+    </p>
+    @if (_report?.HasMessages == true)
+    {
+        <BSTable IsResponsive="true" IsStriped="true">
+            <BSTHead>
+                <BSTR>
+                    <BSTD>Description</BSTD>
+                    <BSTD>Affected key</BSTD>
+                </BSTR>
+            </BSTHead>
+            <BSTBody>
+                @foreach (var (error, keys) in _report!.Errors.Where(x => x.Value.Count > 0))
+                {
+                    var nextDsc = error.GetDescription();
+                    foreach (var key in keys)
+                    {
+                        var dsc = nextDsc;
+                        <BSTR Color="BSColor.Danger">
+                            <BSTD>@dsc</BSTD>
+                            <BSTD>@key</BSTD>
+                        </BSTR>
+                        nextDsc = string.Empty;
+                    }
+                }
+                @foreach (var (warning, keys) in _report!.Warnings.Where(x => x.Value.Count > 0))
+                {
+                    var nextDsc = warning.GetDescription();
+                    foreach (var key in keys)
+                    {
+                        var dsc = nextDsc;
+                        <BSTR Color="BSColor.Warning">
+                            <BSTD>@dsc</BSTD>
+                            <BSTD>@key</BSTD>
+                        </BSTR>
+                        nextDsc = string.Empty;
+                    }
+                }
+                @foreach (var (info, keys) in _report!.Informations.Where(x => x.Value.Count > 0))
+                {
+                    var nextDsc = info.GetDescription();
+                    foreach (var key in keys)
+                    {
+                        var dsc = nextDsc;
+                        <BSTR>
+                            <BSTD>@dsc</BSTD>
+                            <BSTD>@key</BSTD>
+                        </BSTR>
+                        nextDsc = string.Empty;
+                    }
+                }
+            </BSTBody>
+        </BSTable>
+    }
+    else
+    {
+        <p>
+            No issues found.
+        </p>
+    }
+
+    <BSButton Color="BSColor.Primary" IsOutlined="true" Class="mb-4" @onclick="@(_ => _state = States.Configuration)">
+        <i class="bi bi-chevron-double-left"></i> Go back
+    </BSButton>           
+}
+
+<BSModal @ref="ErrorModal" IsCentered="true" IsScrollable="true">
+    <Header>@_errorTitle</Header>
+    <Content>
+        <p>
+            @((MarkupString)_errorMessage)
+        </p>
+        <pre>
+            @_errorDescription
+        </pre>
+    </Content>
+    <Footer Context="modal">
+        <BSButton MarginStart="Margins.Auto" Color="BSColor.Danger" @onclick="modal.HideAsync">Close</BSButton>
+    </Footer>
+</BSModal>
+
+@code
+{
+    [Inject] IBlazorDownloadFileService DownloadService { get; set; } = null!;
+    
+    private MergeStrategy _mergeStrategy = MergeStrategy.Overwrite;
+    private IBrowserFile? _switchFile;
+    private IBrowserFile? _pcFile;
+
+    private BSModal ErrorModal { set; get; } = null!;
+
+    private States State
+    {
+        get => _state;
+        set
+        {
+            // Free memory
+            if (value != States.Results)
+            {
+                _modifiedSave = null;
+                _report = null;
+                _lastSaveFileName = null;
+            }
+            // Reset internal file select cache
+            if (value == States.Configuration)
+            {
+                _pcFile = null;
+                _switchFile = null;
+            }
+            _state = value;
+        }
+    }
+
+    private string _errorDescription = "";
+    private string _errorMessage = "";
+    private string _errorTitle = "";
+
+    private States _state = States.Configuration;
+    private ConversionReport? _report;
+    
+    private byte[]? _modifiedSave;
+    private string? _lastSaveFileName;
+    
+    private enum States
+    {
+        Configuration,
+        Loading,
+        Results
+    }
+    
+    private void OnSwitchFileChange(InputFileChangeEventArgs args)
+    {
+        if(args.FileCount > 0)
+            _switchFile = args.File;
+    }
+
+    private void OnPcFileChange(InputFileChangeEventArgs args)
+    {
+        if(args.FileCount > 0)
+            _pcFile = args.File;
+    }
+
+    private void OnValidationFailed(string message)
+    {
+        _errorTitle = "Missing data";
+        _errorMessage = $"{message} Please add the missing data.";
+        _errorDescription = "";
+        ErrorModal.ShowAsync();
+    }
+    
+    private async Task OnMergeStart()
+    {
+        if (_pcFile == null)
+        {
+            OnValidationFailed("No PC save data file selected.");
+            return;
+        } 
+        if (_switchFile == null)
+        {
+            OnValidationFailed("No Nintendo Switch save data file selected.");
+            return;
+        }
+
+        // TODO implement
+        if (_mergeStrategy == MergeStrategy.Combine)
+        {
+            _errorTitle = "Not implemented";
+            _errorMessage = $"The 'combine' mode has not been implemented yet. Please use 'overwrite' for now...";
+            _errorDescription = "";
+            await ErrorModal.ShowAsync();
+            return;
+        }
+        
+        _lastSaveFileName = _pcFile.Name;
+        
+        _state = States.Loading;
+        
+        SaveData? data;
+        try
+        {
+            using var pcReadStream = new MemoryStream();
+            await _pcFile.OpenReadStream(52428800 /* 50MB max */).CopyToAsync(pcReadStream);
+            pcReadStream.Seek(0, SeekOrigin.Begin);
+
+            data = new SaveData(pcReadStream, SaveDataFormat.Binary);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(ex);
+            _errorTitle = "Deserialization of PC save failed";
+            _errorMessage = $"<p>Did you select the correct PC save file?</p><p>{ex.Message}</p>";
+            _errorDescription = ex.ToString();
+            await ErrorModal.ShowAsync();
+            _state = States.Configuration;
+            return;
+        }
+        
+        try {
+            using var swReadStream = new MemoryStream();
+            await _switchFile.OpenReadStream(52428800 /* 50MB max */).CopyToAsync(swReadStream);
+            swReadStream.Seek(0, SeekOrigin.Begin);
+            
+            _report = data.MergeFromSwitch(swReadStream.ToArray(), _mergeStrategy);
+            
+            using var writeStream = new MemoryStream();
+            data.Export(writeStream, SaveDataFormat.Binary);
+            _modifiedSave = writeStream.ToArray();
+            
+            _state = States.Results;
+            await DownloadService.DownloadFile(_lastSaveFileName, _modifiedSave, "application/octet-stream");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(ex);
+            _errorTitle = "Transfer failed";
+            _errorMessage = $"<p>Did you select the correct Switch save data file?</p><p>{ex.Message}</p>";
+            _errorDescription = ex.ToString();
+            await ErrorModal.ShowAsync();
+            _state = States.Configuration;
+        }
+    }
+
+    private async Task Redownload()
+    {
+        if(_modifiedSave != null)
+            await DownloadService.DownloadFile(_lastSaveFileName ?? "merged.sav", _modifiedSave, "application/octet-stream");
+    }
+}

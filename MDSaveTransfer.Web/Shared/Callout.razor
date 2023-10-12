@@ -1,0 +1,10 @@
+<div class="@(string.Join(' ', ClassNames))" tabindex="-1" @attributes="@Attributes">
+    <div class="@CalloutHeadingCSSClass mb-2">
+        <strong>
+            <i class="me-2 bi @IconName"></i>@heading
+        </strong>
+    </div>
+    <div>
+        @ChildContent
+    </div>
+</div>
